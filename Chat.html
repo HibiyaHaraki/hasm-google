@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #17283d; background: #f3f6fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 900px; margin: auto; padding: 24px 16px; }
+    h1 { margin: 0; font-size: 1.8rem; }
+    .subtitle { color: #506078; margin: 8px 0 20px; }
+    .panel, article { background: white; border: 1px solid #d5deea; border-radius: 14px; padding: 20px; }
+    .controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    select, textarea, button { font: inherit; border-radius: 8px; }
+    select, textarea { border: 1px solid #9aabc0; padding: 10px; background: white; color: inherit; }
+    button { padding: 11px 16px; border: none; background: #174fa3; color: white; cursor: pointer; min-height: 44px; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    :focus-visible { outline: 3px solid #b26800; outline-offset: 3px; }
+    .privacy, .hint { font-size: .88rem; color: #506078; line-height: 1.5; }
+    #status { min-height: 24px; margin: 14px 0 0; }
+    #error { color: #9c2020; background: #fff0ef; border-radius: 8px; padding: 12px; margin-top: 12px; white-space: pre-wrap; }
+    [hidden] { display: none !important; }
+    #conversation { display: grid; gap: 16px; margin: 20px 0; }
+    article.user { background: #e7effc; margin-left: 12%; }
+    article h2 { font-size: 1rem; margin: 0 0 12px; }
+    article h3 { font-size: 1rem; margin: 18px 0 6px; }
+    .message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+    a { color: #174fa3; text-underline-offset: 3px; overflow-wrap: anywhere; }
+    .citation { font-size: .85em; font-weight: 700; }
+    details { border-top: 1px solid #d5deea; margin-top: 18px; padding-top: 12px; }
+    summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+    li { margin: 10px 0; line-height: 1.5; }
+    .uuid { display: block; color: #506078; font-size: .8rem; overflow-wrap: anywhere; }
+    textarea { width: 100%; resize: vertical; min-height: 110px; }
+    .compose-footer { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 10px; }
+    .hint { margin: 0; }
+    @media (max-width: 560px) {
+      main { padding: 16px 10px; }
+      .panel, article { padding: 16px; }
+      .controls > *, select, .controls button { width: 100%; }
+      article.user { margin-left: 4%; }
+      .compose-footer { align-items: start; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>HASM Coach</h1>
+      <p class="subtitle">Turn lived experience into your next useful step.</p>
+    </header>
+    <section class="panel" aria-label="Conversation settings">
+      <div class="controls">
+        <div>
+          <label for="mode">Coaching mode</label>
+          <select id="mode">
+            <option value="career">Career &amp; job hunting</option>
+            <option value="mentorship">Mentorship &amp; troubleshooting</option>
+          </select>
+        </div>
+        <button id="start" type="button">Start / reload records</button>
+      </div>
+      <p class="privacy">When you send a message, your challenge, recent conversation and HASM records
+        are sent to the configured Gemini API for matching and coaching. No assets or external pages
+        are fetched. AI output can be wrong: verify claims and sources before using them.</p>
+      <p id="status" role="status" aria-live="polite">Start a conversation to load your records.</p>
+      <div id="error" role="alert" hidden></div>
+    </section>
+    <section id="conversation" aria-label="Conversation" aria-busy="false"></section>
+    <form id="composer" class="panel">
+      <label for="message">What are you working through?</label>
+      <textarea id="message" maxlength="4000" required disabled
+        placeholder="For example: Help me explain a time I resolved conflicting priorities, or coach a junior teammate who is afraid to ask for help."></textarea>
+      <div class="compose-footer">
+        <p class="hint">Up to 4,000 characters. Ctrl/Cmd + Enter to send.<br>Only the last 3 completed turns are remembered.</p>
+        <button id="send" type="submit" disabled>Send</button>
+      </div>
+    </form>
+  </main>
+  <script>
+    'use strict';
+    const ui = {
+      mode: document.getElementById('mode'),
+      start: document.getElementById('start'),
+      status: document.getElementById('status'),
+      error: document.getElementById('error'),
+      conversation: document.getElementById('conversation'),
+      composer: document.getElementById('composer'),
+      message: document.getElementById('message'),
+      send: document.getElementById('send')
+    };
+    let sessionId = '';
+    let busy = false;
+
+    function setBusy(value, status) {
+      busy = value;
+      ui.mode.disabled = value;
+      ui.start.disabled = value;
+      ui.send.disabled = value || !sessionId;
+      ui.message.disabled = value || !sessionId;
+      ui.conversation.setAttribute('aria-busy', String(value));
+      ui.status.textContent = status;
+    }
+
+    function showError(error) {
+      ui.error.textContent = error && error.message ? error.message : String(error);
+      ui.error.hidden = false;
+    }
+
+    function clearError() {
+      ui.error.hidden = true;
+      ui.error.textContent = '';
+    }
+
+    function safeLink(text, url) {
+      if (typeof url !== 'string' || !/^https?:\/\/[^\s<>"\\]+$/i.test(url)) {
+        return document.createTextNode(text);
+      }
+      const link = document.createElement('a');
+      link.textContent = text;
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      return link;
+    }
+
+    function appendCitedText(element, text, sources) {
+      const pattern = /\[([0-9a-f-]+)\]/gi;
+      let cursor = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        element.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+        const index = sources.findIndex(function(source) { return source.uuid === match[1]; });
+        if (index >= 0) {
+          const citation = safeLink('[' + (index + 1) + ']', sources[index].url);
+          if (citation.nodeType === 1) {
+            citation.className = 'citation';
+            citation.title = sources[index].title + ' (' + match[1] + ')';
+            citation.setAttribute('aria-label', 'Source ' + (index + 1) + ': ' + sources[index].title);
+          }
+          element.appendChild(citation);
+        } else {
+          element.appendChild(document.createTextNode(match[0]));
+        }
+        cursor = pattern.lastIndex;
+      }
+      element.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+
+    function addMessage(role, text) {
+      const article = document.createElement('article');
+      article.className = role;
+      const heading = document.createElement('h2');
+      heading.textContent = role === 'user' ? 'You' : 'HASM Coach';
+      article.appendChild(heading);
+      if (text) {
+        const body = document.createElement('div');
+        body.className = 'message-text';
+        body.textContent = text;
+        article.appendChild(body);
+      }
+      ui.conversation.appendChild(article);
+      return article;
+    }
+
+    function renderResponse(response) {
+      const article = addMessage('assistant');
+      response.sections.forEach(function(section) {
+        const heading = document.createElement('h3');
+        heading.textContent = section.heading;
+        const body = document.createElement('div');
+        body.className = 'message-text';
+        appendCitedText(body, section.text, response.sources);
+        article.append(heading, body);
+      });
+      if (response.sources.length) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Sources (' + response.sources.length + ')';
+        const list = document.createElement('ol');
+        response.sources.forEach(function(source) {
+          const item = document.createElement('li');
+          item.appendChild(safeLink(source.type + ': ' + source.title, source.url));
+          const uuid = document.createElement('span');
+          uuid.className = 'uuid';
+          uuid.textContent = source.uuid;
+          item.appendChild(uuid);
+          source.links.forEach(function(url, index) {
+            const reference = document.createElement('div');
+            reference.appendChild(safeLink('Original reference ' + (index + 1), url));
+            item.appendChild(reference);
+          });
+          list.appendChild(item);
+        });
+        details.append(summary, list);
+        article.appendChild(details);
+      }
+      if (response.matches.length) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Structural matching rationale (AI-generated)';
+        const list = document.createElement('ul');
+        response.matches.forEach(function(match) {
+          const item = document.createElement('li');
+          item.textContent = match.rationale;
+          const uuid = document.createElement('span');
+          uuid.className = 'uuid';
+          uuid.textContent = match.uuid;
+          item.appendChild(uuid);
+          list.appendChild(item);
+        });
+        details.append(summary, list);
+        article.appendChild(details);
+      }
+      article.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }
+
+    ui.start.addEventListener('click', function() {
+      if (busy) { return; }
+      clearError();
+      sessionId = '';
+      setBusy(true, 'Reading and indexing HASM records from Drive...');
+      google.script.run.withSuccessHandler(function(result) {
+        sessionId = result.sessionId;
+        ui.conversation.replaceChildren();
+        setBusy(false, result.nodeCount + ' records ready. Cache lasts up to ' +
+          result.cacheSeconds / 60 + ' minutes; reload to see Drive edits.');
+        ui.message.focus();
+      }).withFailureHandler(function(error) {
+        setBusy(false, 'Records could not be loaded. Correct the error and try again.');
+        showError(error);
+      }).startHASMChat(ui.mode.value, true);
+    });
+
+    ui.mode.addEventListener('change', function() {
+      sessionId = '';
+      ui.conversation.replaceChildren();
+      clearError();
+      setBusy(false, 'Mode changed. Start a new conversation to continue.');
+    });
+
+    ui.composer.addEventListener('submit', function(event) {
+      event.preventDefault();
+      if (busy || !sessionId || !ui.message.value.trim() || !ui.composer.reportValidity()) { return; }
+      clearError();
+      const message = ui.message.value.trim();
+      const userArticle = addMessage('user', message);
+      setBusy(true, 'Comparing structural patterns and composing guidance. This may take a few minutes...');
+      google.script.run.withSuccessHandler(function(response) {
+        renderResponse(response);
+        ui.message.value = '';
+        setBusy(false, 'Response ready. Review the sources before using the advice.');
+        ui.message.focus();
+      }).withFailureHandler(function(error) {
+        userArticle.remove();
+        setBusy(false, 'Request failed. Your draft is preserved; check the error or reload if the session expired.');
+        showError(error);
+        ui.message.focus();
+      }).sendHASMChatMessage(sessionId, message);
+    });
+
+    ui.message.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        ui.composer.requestSubmit();
+      }
+    });
+  </script>
+</body>
+</html>

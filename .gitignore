@@ -1,0 +1,16 @@
+.clasp.json
+.clasp.*.json
+.clasprc.json
+.env
+.env.*
+!.env.example
+credentials/
+credentials.json
+service-account*.json
+*.pem
+*.key
+node_modules/
+.cache/
+.DS_Store
+*.log
+coverage/

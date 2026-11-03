@@ -1,0 +1,191 @@
+const HASM_CHAT = Object.freeze({
+  CACHE_SECONDS: 600,
+  CACHE_CHUNK_SIZE: 80000,
+  MAX_CACHE_CHUNKS: 12,
+  MAX_ENTITIES: 300,
+  MAX_NODE_CHARS: 16000,
+  MAX_MESSAGE_CHARS: 4000,
+  MAX_HISTORY_TURNS: 3,
+  RETRIEVAL_BATCH_SIZE: 20,
+  MAX_MATCHES: 5,
+  MAX_CONTEXT_NODES: 15,
+  UUID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+});
+
+function getHASMChatConfig_() {
+  const properties = PropertiesService.getScriptProperties();
+  return {
+    apiKey: requiredProperty_(properties, 'GEMINI_API_KEY'),
+    model: properties.getProperty('GEMINI_MODEL') || HASM.DEFAULT_MODEL,
+    rootFolderId: properties.getProperty('HASM_CHAT_ROOT_FOLDER_ID') || ''
+  };
+}
+
+function getHASMChatRoot_(config) {
+  if (config.rootFolderId) {
+    return DriveApp.getFolderById(config.rootFolderId);
+  }
+  const folders = DriveApp.getFoldersByName(HASM.ROOT_FOLDER_NAME);
+  if (!folders.hasNext()) {
+    throw new Error('No HASM root exists. Run syncHASM or set HASM_CHAT_ROOT_FOLDER_ID.');
+  }
+  const root = folders.next();
+  if (folders.hasNext()) {
+    throw new Error('Multiple HASM roots exist. Set HASM_CHAT_ROOT_FOLDER_ID explicitly.');
+  }
+  return root;
+}
+
+function singleHASMChatChild_(parent, name, folders) {
+  const children = folders ? parent.getFoldersByName(name) : parent.getFilesByName(name);
+  if (!children.hasNext()) {
+    throw new Error('Missing HASM item: ' + name);
+  }
+  const child = children.next();
+  if (children.hasNext()) {
+    throw new Error('Ambiguous HASM item: ' + name);
+  }
+  return child;
+}
+
+function parseHASMChatMarkdown_(markdown, row, fileUrl) {
+  const match = markdown.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/);
+  if (!match) {
+    throw new Error('Missing YAML frontmatter for ' + row.uuid);
+  }
+  const fields = Object.create(null);
+  match[1].split(/\r?\n/).forEach(function(line) {
+    if (!line.trim() || /^\s*#/.test(line)) {
+      return;
+    }
+    const field = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*?)\s*$/);
+    if (!field || Object.prototype.hasOwnProperty.call(fields, field[1])) {
+      throw new Error('Unsupported or duplicate YAML field for ' + row.uuid + ': ' + line);
+    }
+    const raw = field[2];
+    if (/^["\[{]/.test(raw)) {
+      fields[field[1]] = JSON.parse(raw);
+    } else if (raw.charAt(0) === "'" && raw.charAt(raw.length - 1) === "'") {
+      fields[field[1]] = raw.slice(1, -1).replace(/''/g, "'");
+    } else {
+      if (/^[>|&*!]/.test(raw)) {
+        throw new Error('Use single-line JSON-compatible YAML scalars for ' + row.uuid);
+      }
+      fields[field[1]] = raw;
+    }
+  });
+  if (fields.uuid !== row.uuid || fields.entity_type !== row.entity_type ||
+      typeof fields.title !== 'string' || !fields.title.trim()) {
+    throw new Error('HASM index/frontmatter mismatch for ' + row.uuid);
+  }
+  let links = fields.link === undefined ? [] : fields.link;
+  if (typeof links === 'string') {
+    links = JSON.parse(links);
+  }
+  if (!Array.isArray(links) || links.some(function(url) { return typeof url !== 'string'; })) {
+    throw new Error('HASM link must be a JSON URL array for ' + row.uuid);
+  }
+  return {
+    uuid: row.uuid,
+    type: row.entity_type,
+    title: fields.title,
+    fields: fields,
+    body: match[2].trim(),
+    url: fileUrl,
+    links: uniqueStrings_(links).filter(isHASMChatWebUrl_)
+  };
+}
+
+function isHASMChatWebUrl_(url) {
+  return typeof url === 'string' && /^https?:\/\/[^\s<>"\\]+$/i.test(url);
+}
+
+function readHASMChatCorpus_(root) {
+  const databaseFile = singleHASMChatChild_(root, HASM.DATABASE_FILE_NAME, false);
+  const database = JSON.parse(databaseFile.getBlob().getDataAsString('UTF-8'));
+  if (database.schema_version !== 1 || !Array.isArray(database.entities) || !Array.isArray(database.links)) {
+    throw new Error('Chat requires a schema_version 1 JSON hasm.db.');
+  }
+  if (database.entities.length > HASM_CHAT.MAX_ENTITIES) {
+    throw new Error('Chat supports up to ' + HASM_CHAT.MAX_ENTITIES + ' entities per root. Use a smaller curated HASM root.');
+  }
+  const nodes = [];
+  const known = Object.create(null);
+  const typeFolders = Object.create(null);
+  database.entities.forEach(function(row) {
+    if (!row || typeof row.uuid !== 'string' || !HASM_CHAT.UUID_PATTERN.test(row.uuid) ||
+        ['EXPERIENCE', 'FACT', 'LINK', 'PERSON'].indexOf(row.entity_type) === -1 || known[row.uuid]) {
+      throw new Error('Invalid or duplicate HASM entity in hasm.db.');
+    }
+    known[row.uuid] = true;
+    const expectedPath = row.entity_type + '/' + row.uuid + '/main.md';
+    if (row.path !== undefined && row.path !== expectedPath) {
+      throw new Error('Invalid HASM entity path for ' + row.uuid);
+    }
+    if (!typeFolders[row.entity_type]) {
+      typeFolders[row.entity_type] = singleHASMChatChild_(root, row.entity_type, true);
+    }
+    const folder = singleHASMChatChild_(typeFolders[row.entity_type], row.uuid, true);
+    const file = singleHASMChatChild_(folder, 'main.md', false);
+    if (file.getSize() > HASM_CHAT.MAX_NODE_CHARS * 4) {
+      throw new Error('HASM node is too large for chat: ' + row.uuid);
+    }
+    const markdown = file.getBlob().getDataAsString('UTF-8');
+    if (markdown.length > HASM_CHAT.MAX_NODE_CHARS) {
+      throw new Error('HASM node exceeds ' + HASM_CHAT.MAX_NODE_CHARS + ' characters: ' + row.uuid);
+    }
+    nodes.push(parseHASMChatMarkdown_(markdown, row, file.getUrl()));
+  });
+  const edges = database.links.map(function(edge) {
+    if (!edge || !known[edge.from_uuid] || !known[edge.to_uuid] || typeof edge.relation !== 'string') {
+      throw new Error('Invalid or dangling HASM graph relation.');
+    }
+    return { from_uuid: edge.from_uuid, to_uuid: edge.to_uuid, relation: edge.relation };
+  });
+  // LINK nodes can also encode graph endpoints in their own metadata.
+  nodes.filter(function(node) { return node.type === 'LINK'; }).forEach(function(node) {
+    const from = node.fields.from_uuid;
+    const to = node.fields.to_uuid;
+    if (from || to) {
+      if (!known[from] || !known[to] || typeof node.fields.relation !== 'string') {
+        throw new Error('Invalid LINK endpoints for ' + node.uuid);
+      }
+      edges.push({ from_uuid: from, to_uuid: to, relation: node.fields.relation, link_uuid: node.uuid });
+    }
+  });
+  return { nodes: nodes, edges: edges };
+}
+
+function putHASMChatCache_(cache, key, value) {
+  const encoded = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(value))).getBytes());
+  const count = Math.ceil(encoded.length / HASM_CHAT.CACHE_CHUNK_SIZE);
+  if (count > HASM_CHAT.MAX_CACHE_CHUNKS) {
+    throw new Error('HASM chat data exceeds the session cache budget. Use a smaller curated root.');
+  }
+  const generation = Utilities.getUuid();
+  const entries = {};
+  for (let i = 0; i < count; i++) {
+    entries[key + ':' + generation + ':' + i] = encoded.slice(
+      i * HASM_CHAT.CACHE_CHUNK_SIZE, (i + 1) * HASM_CHAT.CACHE_CHUNK_SIZE);
+  }
+  cache.putAll(entries, HASM_CHAT.CACHE_SECONDS);
+  cache.put(key, JSON.stringify({ generation: generation, count: count }), HASM_CHAT.CACHE_SECONDS);
+}
+
+function getHASMChatCache_(cache, key) {
+  const raw = cache.get(key);
+  if (!raw) {
+    return null;
+  }
+  const manifest = JSON.parse(raw);
+  const keys = [];
+  for (let i = 0; i < manifest.count; i++) {
+    keys.push(key + ':' + manifest.generation + ':' + i);
+  }
+  const entries = cache.getAll(keys);
+  if (keys.some(function(part) { return !entries[part]; })) {
+    return null;
+  }
+  const encoded = keys.map(function(part) { return entries[part]; }).join('');
+  return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(encoded))).getDataAsString('UTF-8'));
+}
