@@ -20,6 +20,8 @@ Set these in **Project Settings → Script Properties**:
 ## Entry points
 
 - `syncHASM()` performs a locked sync and schedules continuations when needed.
+- `migrateHASMDatabase()` upgrades the persisted JSON index to schema version 2
+  while retaining schema-version-1 rows for compatibility.
 - `runHASMUnitTests()` runs service-independent parser, grouping, and schema tests.
 - `doGet()` serves the coaching UI.
 - `startHASMChat(mode, refresh)` validates `career`/`mentorship`, loads the user
@@ -75,9 +77,37 @@ Maps imports accept an array named `timelineObjects`, `semanticSegments`, or `ti
 
 ## Persisted schema
 
-`hasm.db` is UTF-8 JSON with `schema_version`, `entities`, `links`, `source_keys`, `people_by_key`, and `assets_by_id`. The `links` array is the relational junction table: `{ "from_uuid": "...", "to_uuid": "...", "relation": "..." }`.
+`hasm.db` is UTF-8 JSON with `schema_version: 2` and table-named arrays:
+`person`, `experience`, `experience_tree`, `fact`, `fact_experience`, `link`,
+and `link_relation`. Entity rows use the column names from the HASM model; the
+three relationship arrays use the corresponding junction-table columns.
+`sync_metadata` holds source deduplication keys, copied asset IDs, and preserved
+schema-version-1 rows for backwards-compatible reads. Each PERSON references
+its root EXPERIENCE through `life_experience_id`; generated links store typed
+origin and target IDs with `Person`, `Experience`, or `Fact` entity-type values.
+Run `migrateHASMDatabase()` once in Apps Script to upgrade an existing
+schema-version-1 JSON index; the migration preserves legacy entity/relation rows
+without treating them as new model rows.
 
-Every `main.md` has common YAML frontmatter `uuid`, `title`, `timestamp`, `entity_type`, and `link`. `link` is a YAML string containing JSON-encoded external URL references; absent references are represented by the string `"[]"`. Entity-specific model output is stored as additional frontmatter fields and a Markdown description body.
+Entity Markdown keeps the common YAML fields `uuid`, `title`, `timestamp`,
+`entity_type`, and `link`, alongside model-specific fields and a description
+body. `link` is a native JSON/YAML array of external URL strings (including an
+empty `[]`), not a JSON-encoded string. URL entries must be absolute HTTP(S)
+URLs without credentials or whitespace.
+
+Apps Script cannot create a native SQLite database. To open a synced/downloaded
+`hasm_root` in HASM desktop, convert its JSON file to the native SQLite
+`main.db` with Python's standard-library SQLite support:
+
+```powershell
+python tools\export_sqlite.py C:\path\to\hasm_root
+```
+
+The exporter writes `<hasm_root>\main.db`, refuses to overwrite an existing
+file unless `--overwrite` is explicitly supplied, and validates model
+relationships and Markdown files. The SQLite database includes the HASM model
+tables and junction tables, plus the compatibility columns used by the desktop
+app's current readers. See `README.md` for the expected local folder workflow.
 
 ## API behavior
 

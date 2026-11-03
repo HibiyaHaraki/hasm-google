@@ -5,7 +5,7 @@
 - `Sources.gs` reads date-bounded Gmail messages, a user-selected Google Maps Timeline JSON export, and images from a user-selected Drive folder.
 - `Sync.gs` serializes runs with a script lock, clusters records using a fixed-from-first-record time window, and schedules a one-minute continuation trigger for bounded work.
 - `Gemini.gs` sends each new event group to the configured Gemini model and validates the returned structured JSON before persistence.
-- `HASM.gs` writes entity folders and `main.md` files, copies referenced images into an experience's `assets/`, and maintains the JSON relational index named `hasm.db`.
+- `HASM.gs` writes entity folders and `main.md` files, copies referenced images into an experience's `assets/`, and maintains the schema-version-2 JSON database with model-shaped entity and junction tables.
 - `ChatApp.gs`, `ChatData.gs`, `ChatGemini.gs`, and `Chat.html` add read-only
   conversational coaching over that same index. See
   [chat-architecture.md](chat-architecture.md) for retrieval, prompts, user cache,
@@ -13,9 +13,18 @@
 
 ## Drive layout
 
-`hasm_root/` contains `hasm.db` and one directory per entity type. Each entity directory contains a UUID-named folder with `main.md` and `assets/`. Entity frontmatter uses JSON-compatible YAML scalars; `link` is a YAML string whose value is a JSON array, for example `"[]"`.
+`hasm_root/` contains JSON `hasm.db` and one directory per entity type. Each entity directory contains a UUID-named folder with `main.md` and `assets/`. Entity frontmatter uses JSON-compatible YAML scalars; `link` is a native JSON/YAML string array, for example `[]`.
 
-`hasm.db` is JSON rather than SQLite. Apps Script has no built-in SQLite storage, so this file contains entity rows, junction rows (`links`), source-key deduplication, person identity keys, and copied asset IDs. New entity files are created before the index is updated; a run is protected from concurrent execution but Drive does not provide a multi-file transaction.
+The JSON database follows the HASM model with `person`, `experience`,
+`experience_tree`, `fact`, `fact_experience`, `link`, and `link_relation`
+tables. `sync_metadata` contains source-key deduplication and copied asset IDs;
+schema-version-1 rows are preserved there during migration.
+
+Apps Script cannot create binary SQLite files. `tools/export_sqlite.py` converts
+a local copy of the Drive folder into SQLite `main.db`, including the model
+tables and desktop-reader compatibility columns. New entity files are created
+before the JSON database is updated; a run is protected from concurrent
+execution but Drive does not provide a multi-file transaction.
 
 ## Grouping and identity
 

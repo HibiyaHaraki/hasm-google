@@ -14,6 +14,26 @@ records and their source references.
 4. Run `syncHASM` once and grant Gmail, Drive, external request, and trigger permissions when prompted.
 5. Run `runHASMUnitTests` to execute the standalone tests.
 
+## Open the generated model in HASM desktop
+
+Apps Script stores the model-shaped relational tables as UTF-8 JSON in
+`hasm_root/hasm.db`. After syncing or downloading that Drive folder locally,
+create the native SQLite database expected by HASM desktop:
+
+```powershell
+python tools\export_sqlite.py C:\path\to\hasm_root
+```
+
+This writes `main.db` into the local folder, with the HASM entity and junction
+tables plus the compatibility columns used by the desktop app. The exporter
+requires Python 3 and uses only its standard library. It does not overwrite an
+existing database unless `--overwrite` is explicitly passed. Keep the Markdown
+entity folders alongside `main.db` when opening the model in the desktop app.
+For an existing schema-version-1 JSON database, run `migrateHASMDatabase` once
+from the Apps Script editor before downloading it. The migration preserves old
+index rows for backward-compatible chat and lets the desktop app bootstrap
+those legacy folders when the workspace is opened.
+
 ## Coaching web app
 
 1. Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` in Script Properties.
@@ -44,8 +64,9 @@ oversized data and malformed records fail explicitly.
 ## Tests
 
 Run `npm test` with Node.js to execute both GAS unit suites, mocked service
-integration tests and client-script syntax checks. No dependency installation
-is needed. In Apps Script, run `runHASMUnitTests` and `runHASMChatUnitTests`
+integration tests and client-script syntax checks. Run
+`python tests\test_sqlite_export.py` to test SQLite generation. No package
+installation is needed. In Apps Script, run `runHASMUnitTests` and `runHASMChatUnitTests`
 (include the `.gs` files from `tests/`). Real Drive authorization and Gemini
 quality require a private deployed smoke test.
 

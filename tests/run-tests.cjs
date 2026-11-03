@@ -123,15 +123,42 @@ const rows = ['EXPERIENCE', 'FACT', 'PERSON', 'LINK'].map((type, i) => ({
   uuid: uuid(i + 1), entity_type: type, path: type + '/' + uuid(i + 1) + '/main.md'
 }));
 const database = {
-  schema_version: 1, entities: rows,
-  links: rows.slice(1).map(row => ({ from_uuid: uuid(1), to_uuid: row.uuid, relation: 'supports' }))
+  schema_version: 2,
+  person: [{
+    person_id: uuid(3), life_experience_id: uuid(1), person_name: 'Ada',
+    person_description: 'A project lead.', link: [], security_level: 0
+  }],
+  experience: [{
+    experience_id: uuid(1), experience_name: 'Constraint negotiation',
+    experience_description: 'First failed, then used a shared checklist.',
+    link: ['https://example.com'], security_level: 0
+  }],
+  experience_tree: [],
+  fact: [{
+    fact_id: uuid(2), fact_name: 'Used a checklist', fact_description: 'The team used a shared checklist.',
+    link: ['https://example.com'], occurred_at: '2025-01-01', start_time: '2025-01-01',
+    end_time: '2025-01-01', security_level: 0
+  }],
+  fact_experience: [{ fact_id: uuid(2), experience_id: uuid(1) }],
+  link: [{
+    link_id: uuid(4), link_type: 'supports', link_description: 'Connects the experience and fact.',
+    link: ['https://example.com'], origin_entity_type: 'Experience', origin_entity_id: uuid(1),
+    target_entity_type: 'Fact', target_entity_id: uuid(2), security_level: 0
+  }],
+  link_relation: [],
+  sync_metadata: { source_keys: {}, assets_by_id: {}, legacy_entities: [], legacy_links: [] }
 };
+context.validateHASMDatabase_(database);
 driveRoot = folder('hasm_root', [
   file('hasm.db', JSON.stringify(database)),
   ...rows.map(row => folder(row.entity_type, [folder(row.uuid, [
     file('main.md', context.renderHASMMarkdown_({
-      ...row, title: 'Constraint negotiation', timestamp: '2025-01-01', link: '["https://example.com"]',
-      fields: { description: 'First failed, then used a shared checklist.', takeaway: 'Expose constraints' },
+      ...row, title: row.entity_type === 'LINK' ? 'Explicit edge' : 'Constraint negotiation',
+      timestamp: '2025-01-01', link: ['https://example.com'],
+      fields: row.entity_type === 'LINK'
+        ? { origin_entity_type: 'Experience', origin_entity_id: uuid(1), target_entity_type: 'Fact',
+          target_entity_id: uuid(2), link_type: 'supports' }
+        : { description: 'First failed, then used a shared checklist.', takeaway: 'Expose constraints' },
       body: 'A team handoff failed; a checklist clarified responsibilities.'
     })), folder('assets')
   ])]))
@@ -166,7 +193,7 @@ function queueTurn(historyLength) {
     check(payload) {
       const input = JSON.parse(payload.contents[0].parts[0].text);
       assert.equal(input.nodes.length, 4, 'related people and links included in generation');
-      assert.equal(input.relations.length, 3);
+      assert.equal(input.relations.length, 4);
       assert.ok(payload.generationConfig.responseSchema);
     }
   });
@@ -265,25 +292,29 @@ driveRoot.children.pop();
 const linkFolder = driveRoot.children[4].children[0];
 const originalLinkFile = linkFolder.children[0];
 linkFolder.children[0] = file('main.md', context.renderHASMMarkdown_({
-  ...rows[3], title: 'Explicit edge', timestamp: '2025-01-01', link: '[]',
+  ...rows[3], title: 'Explicit edge', timestamp: '2025-01-01', link: [],
   fields: { from_uuid: uuid(1), to_uuid: uuid(2), relation: 'clarifies' }, body: ''
 }));
-const explicitEdge = context.readHASMChatCorpus_(driveRoot).edges.find(edge => edge.link_uuid === uuid(4));
+const explicitEdge = context.readHASMChatCorpus_(driveRoot).edges.find(edge => edge.from_uuid === uuid(4));
 assert.equal(explicitEdge.to_uuid, uuid(2), 'LINK UUID endpoints contribute graph edges');
 linkFolder.children[0] = originalLinkFile;
-const originalPath = database.entities[0].path;
-database.entities[0].path = '../outside/main.md';
+database.sync_metadata.legacy_entities.push({
+  uuid: uuid(99), entity_type: 'FACT', path: '../outside/main.md'
+});
 driveRoot.children[0] = file('hasm.db', JSON.stringify(database));
 assert.throws(() => context.readHASMChatCorpus_(driveRoot), /Invalid HASM entity path/);
-database.entities[0].path = originalPath;
-database.links.push({ from_uuid: uuid(1), to_uuid: uuid(999), relation: 'dangling' });
+database.sync_metadata.legacy_entities.pop();
+database.link[0].target_entity_id = uuid(999);
 driveRoot.children[0] = file('hasm.db', JSON.stringify(database));
 assert.throws(() => context.readHASMChatCorpus_(driveRoot), /dangling HASM graph/);
-database.links.pop();
-database.entities.push(rows[0]);
+database.link[0].target_entity_id = uuid(2);
+database.experience.push(database.experience[0]);
 driveRoot.children[0] = file('hasm.db', JSON.stringify(database));
 assert.throws(() => context.readHASMChatCorpus_(driveRoot), /Invalid or duplicate HASM entity/);
-database.entities = Array.from({ length: 301 }, () => rows[0]);
+database.experience = Array.from({ length: 301 }, (_, i) => ({
+  experience_id: uuid(i + 100), experience_name: 'Many', experience_description: '',
+  link: [], security_level: 0
+}));
 driveRoot.children[0] = file('hasm.db', JSON.stringify(database));
 assert.throws(() => context.readHASMChatCorpus_(driveRoot), /up to 300 entities/);
 assert.equal(apiQueue.length, 0);

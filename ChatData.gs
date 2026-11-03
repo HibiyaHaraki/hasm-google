@@ -82,7 +82,7 @@ function parseHASMChatMarkdown_(markdown, row, fileUrl) {
   if (typeof links === 'string') {
     links = JSON.parse(links);
   }
-  if (!Array.isArray(links) || links.some(function(url) { return typeof url !== 'string'; })) {
+  if (!Array.isArray(links) || links.some(function(url) { return !isValidHASMUrl_(url); })) {
     throw new Error('HASM link must be a JSON URL array for ' + row.uuid);
   }
   return {
@@ -92,27 +92,41 @@ function parseHASMChatMarkdown_(markdown, row, fileUrl) {
     fields: fields,
     body: match[2].trim(),
     url: fileUrl,
-    links: uniqueStrings_(links).filter(isHASMChatWebUrl_)
+    links: uniqueStrings_(links)
   };
-}
-
-function isHASMChatWebUrl_(url) {
-  return typeof url === 'string' && /^https?:\/\/[^\s<>"\\]+$/i.test(url);
 }
 
 function readHASMChatCorpus_(root) {
   const databaseFile = singleHASMChatChild_(root, HASM.DATABASE_FILE_NAME, false);
   const database = JSON.parse(databaseFile.getBlob().getDataAsString('UTF-8'));
-  if (database.schema_version !== 1 || !Array.isArray(database.entities) || !Array.isArray(database.links)) {
-    throw new Error('Chat requires a schema_version 1 JSON hasm.db.');
+  if (!database || typeof database !== 'object') {
+    throw new Error('HASM database must be a JSON object.');
   }
-  if (database.entities.length > HASM_CHAT.MAX_ENTITIES) {
+  let rows;
+  let edges = [];
+  if (database.schema_version === 2) {
+    rows = hasmChatModelRows_(database);
+    edges = hasmChatModelEdges_(database);
+  } else if (database.schema_version === 1 && Array.isArray(database.entities) &&
+      Array.isArray(database.links)) {
+    rows = database.entities;
+    edges = database.links.map(function(edge) {
+      return {
+        from_uuid: edge.from_uuid,
+        to_uuid: edge.to_uuid,
+        relation: edge.relation
+      };
+    });
+  } else {
+    throw new Error('Chat requires a supported JSON HASM database schema.');
+  }
+  if (rows.length > HASM_CHAT.MAX_ENTITIES) {
     throw new Error('Chat supports up to ' + HASM_CHAT.MAX_ENTITIES + ' entities per root. Use a smaller curated HASM root.');
   }
   const nodes = [];
   const known = Object.create(null);
   const typeFolders = Object.create(null);
-  database.entities.forEach(function(row) {
+  rows.forEach(function(row) {
     if (!row || typeof row.uuid !== 'string' || !HASM_CHAT.UUID_PATTERN.test(row.uuid) ||
         ['EXPERIENCE', 'FACT', 'LINK', 'PERSON'].indexOf(row.entity_type) === -1 || known[row.uuid]) {
       throw new Error('Invalid or duplicate HASM entity in hasm.db.');
@@ -136,11 +150,10 @@ function readHASMChatCorpus_(root) {
     }
     nodes.push(parseHASMChatMarkdown_(markdown, row, file.getUrl()));
   });
-  const edges = database.links.map(function(edge) {
+  edges.forEach(function(edge) {
     if (!edge || !known[edge.from_uuid] || !known[edge.to_uuid] || typeof edge.relation !== 'string') {
       throw new Error('Invalid or dangling HASM graph relation.');
     }
-    return { from_uuid: edge.from_uuid, to_uuid: edge.to_uuid, relation: edge.relation };
   });
   // LINK nodes can also encode graph endpoints in their own metadata.
   nodes.filter(function(node) { return node.type === 'LINK'; }).forEach(function(node) {
@@ -154,6 +167,93 @@ function readHASMChatCorpus_(root) {
     }
   });
   return { nodes: nodes, edges: edges };
+}
+
+function hasmChatModelRows_(database) {
+  const tables = [
+    { name: 'person', type: 'PERSON', id: 'person_id' },
+    { name: 'experience', type: 'EXPERIENCE', id: 'experience_id' },
+    { name: 'fact', type: 'FACT', id: 'fact_id' },
+    { name: 'link', type: 'LINK', id: 'link_id' }
+  ];
+  tables.forEach(function(table) {
+    if (!Array.isArray(database[table.name])) {
+      throw new Error('HASM database is missing the ' + table.name + ' table.');
+    }
+  });
+  const rows = [];
+  tables.forEach(function(table) {
+    database[table.name].forEach(function(entity) {
+      if (!entity || typeof entity !== 'object') {
+        throw new Error('Invalid row in HASM ' + table.name + ' table.');
+      }
+      rows.push({
+        uuid: entity[table.id],
+        entity_type: table.type,
+        path: table.type + '/' + entity[table.id] + '/main.md'
+      });
+    });
+  });
+  const metadata = database.sync_metadata || {};
+  if (metadata.legacy_entities !== undefined) {
+    if (!Array.isArray(metadata.legacy_entities)) {
+      throw new Error('HASM legacy entity metadata must be an array.');
+    }
+    rows.push.apply(rows, metadata.legacy_entities);
+  }
+  return rows;
+}
+
+function hasmChatModelEdges_(database) {
+  const edges = [];
+  const tables = ['experience_tree', 'fact_experience', 'link', 'link_relation'];
+  tables.forEach(function(table) {
+    if (!Array.isArray(database[table])) {
+      throw new Error('HASM database is missing the ' + table + ' table.');
+    }
+  });
+  database.experience_tree.forEach(function(row) {
+    edges.push({ from_uuid: row.parent_id, to_uuid: row.child_id, relation: 'branches_to' });
+  });
+  database.fact_experience.forEach(function(row) {
+    edges.push({ from_uuid: row.experience_id, to_uuid: row.fact_id, relation: 'contains' });
+  });
+  database.person.forEach(function(row) {
+    edges.push({
+      from_uuid: row.person_id,
+      to_uuid: row.life_experience_id,
+      relation: 'owns_life_experience'
+    });
+  });
+  database.link.forEach(function(row) {
+    edges.push({
+      from_uuid: row.origin_entity_id,
+      to_uuid: row.link_id,
+      relation: 'originates_from'
+    });
+    edges.push({
+      from_uuid: row.link_id,
+      to_uuid: row.target_entity_id,
+      relation: row.link_type
+    });
+  });
+  database.link_relation.forEach(function(row) {
+    edges.push({ from_uuid: row.link_id, to_uuid: row.related_link_id, relation: 'related_link' });
+  });
+  const metadata = database.sync_metadata || {};
+  if (metadata.legacy_links !== undefined) {
+    if (!Array.isArray(metadata.legacy_links)) {
+      throw new Error('HASM legacy relation metadata must be an array.');
+    }
+    metadata.legacy_links.forEach(function(edge) {
+      edges.push({
+        from_uuid: edge.from_uuid,
+        to_uuid: edge.to_uuid,
+        relation: edge.relation
+      });
+    });
+  }
+  return edges;
 }
 
 function putHASMChatCache_(cache, key, value) {

@@ -34,13 +34,15 @@ function testHASMChatMarkdown() {
   const row = { uuid: uuid, entity_type: 'EXPERIENCE' };
   const markdown = renderHASMMarkdown_({
     uuid: uuid, title: 'A "quoted" experience', entity_type: 'EXPERIENCE',
-    timestamp: '2025-01-01', link: '["https://example.com","javascript:alert(1)"]',
+    timestamp: '2025-01-01', link: ['https://example.com'],
     fields: { takeaway: 'Ask\nthen act', emotion: 'Concerned' }, body: 'Reflection'
   });
   const node = parseHASMChatMarkdown_(markdown, row, 'https://drive.google.com/file/d/test/view');
   assertEqual_(node.fields.takeaway, 'Ask\nthen act', 'multiline JSON scalar');
   assertEqual_(node.body, 'Reflection', 'Markdown body');
-  assertEqual_(node.links.length, 1, 'only safe external references exposed');
+  assertEqual_(node.links.length, 1, 'external URL array');
+  const invalidLinks = markdown.replace('https://example.com', 'javascript:alert(1)');
+  assertChatThrows_(function() { parseHASMChatMarkdown_(invalidLinks, row, ''); }, 'JSON URL array');
   const minimal = '---\nuuid: "' + uuid + '"\nentity_type: EXPERIENCE\ntitle: \'It\'\'s useful\'\n---\nBody';
   assertEqual_(parseHASMChatMarkdown_(minimal, row, '').links.length, 0, 'absent links default to []');
   assertEqual_(parseHASMChatMarkdown_(minimal, row, '').title, "It's useful", 'single-quoted YAML');

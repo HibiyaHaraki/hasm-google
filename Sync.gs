@@ -21,7 +21,7 @@ function syncHASM() {
       }
       const group = groups[index];
       const sourceKey = hashSourceIds_(group.map(function(record) { return record.id; }).sort());
-      if (database.source_keys[sourceKey]) {
+      if (database.sync_metadata.source_keys[sourceKey]) {
         continue;
       }
       const generated = generateHASMEvent_(group, config);
@@ -31,7 +31,7 @@ function syncHASM() {
     }
     const pendingGroups = groups.slice(index).some(function(group) {
       const key = hashSourceIds_(group.map(function(record) { return record.id; }).sort());
-      return !database.source_keys[key];
+      return !database.sync_metadata.source_keys[key];
     });
     const pageComplete = collection.gmailPage.complete && !collection.interrupted;
     if (pageComplete && !pendingGroups) {
