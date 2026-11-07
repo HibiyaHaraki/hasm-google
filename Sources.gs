@@ -7,7 +7,97 @@ function collectHASMRecords_(config, deadline) {
   if (Date.now() < deadline) {
     collectDriveMediaRecords_(config, deadline, records);
   }
+  if (Date.now() < deadline) {
+    collectCalendarRecords_(config, deadline, records);
+  }
+  if (Date.now() < deadline) {
+    collectDriveDocumentRecords_(config, deadline, records);
+  }
   return { records: records, gmailPage: gmailPage, interrupted: Date.now() >= deadline };
+}
+
+function collectCalendarRecords_(config, deadline, records) {
+  if (!config.calendarIds.length) {
+    return;
+  }
+  config.calendarIds.forEach(function(calendarId) {
+    if (Date.now() >= deadline) {
+      return;
+    }
+    const calendar = calendarId === 'primary' ? CalendarApp.getDefaultCalendar() : CalendarApp.getCalendarById(calendarId);
+    if (!calendar) {
+      console.warn('[HASM] Calendar not found or not accessible: ' + calendarId);
+      return;
+    }
+    calendar.getEvents(config.startDate, config.endDate).forEach(function(event) {
+      const start = event.getStartTime();
+      const guests = event.getGuestList(true).map(function(guest) { return guest.getEmail(); });
+      records.push({
+        id: 'calendar:' + event.getId() + ':' + start.getTime(),
+        timestamp: start.toISOString(),
+        kind: 'calendar',
+        title: event.getTitle() || '(no title)',
+        text: [
+          'Calendar event: ' + (event.getTitle() || ''),
+          'Start: ' + start.toISOString(),
+          'End: ' + event.getEndTime().toISOString(),
+          event.getLocation() ? 'Location: ' + event.getLocation() : '',
+          guests.length ? 'Guests: ' + guests.join(', ') : '',
+          (event.getDescription() || '').substring(0, HASM.MAX_SOURCE_TEXT_LENGTH)
+        ].filter(String).join('\n'),
+        url: '',
+        assetId: ''
+      });
+    });
+  });
+}
+
+function collectDriveDocumentRecords_(config, deadline, records) {
+  if (!config.docsFolderId) {
+    return;
+  }
+  const startIso = config.startDate.toISOString();
+  const endIso = config.endDate.toISOString();
+  const pending = [config.docsFolderId];
+  let count = 0;
+  while (pending.length && Date.now() < deadline && count < HASM.MAX_DRIVE_DOCS_PER_RUN) {
+    const folder = DriveApp.getFolderById(pending.shift());
+    const subfolders = folder.getFolders();
+    while (subfolders.hasNext()) {
+      pending.push(subfolders.next().getId());
+    }
+    const files = folder.searchFiles(
+      "trashed = false and modifiedDate >= '" + startIso + "' and modifiedDate < '" + endIso + "'");
+    while (files.hasNext() && Date.now() < deadline && count < HASM.MAX_DRIVE_DOCS_PER_RUN) {
+      const file = files.next();
+      const mimeType = file.getMimeType();
+      let text = '';
+      try {
+        if (mimeType === 'application/vnd.google-apps.document' || mimeType === 'application/vnd.google-apps.presentation') {
+          text = file.getAs('text/plain').getDataAsString('UTF-8');
+        } else if (/^text\//.test(mimeType)) {
+          text = file.getBlob().getDataAsString('UTF-8');
+        } else {
+          continue;
+        }
+      } catch (error) {
+        console.warn('[HASM] Could not read Drive file ' + file.getName() + ': ' + error.message);
+        continue;
+      }
+      count++;
+      const modified = file.getLastUpdated();
+      records.push({
+        id: 'drivedoc:' + file.getId() + ':' + modified.getTime(),
+        timestamp: modified.toISOString(),
+        kind: 'document',
+        title: file.getName(),
+        text: 'Document: ' + file.getName() + '\nModified: ' + modified.toISOString() + '\n' +
+          text.replace(/\s+/g, ' ').trim().substring(0, HASM.MAX_SOURCE_TEXT_LENGTH),
+        url: file.getUrl(),
+        assetId: ''
+      });
+    }
+  }
 }
 
 function collectGmailRecords_(config, deadline, records) {

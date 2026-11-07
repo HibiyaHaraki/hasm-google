@@ -52,9 +52,13 @@ function buildHASMStructuralPrompt_() {
 }
 
 function retrieveHASMChatMatches_(corpus, message, history, config, deadline) {
-  const candidates = corpus.nodes.filter(function(node) {
+  let candidates = corpus.nodes.filter(function(node) {
     return node.type === 'EXPERIENCE' || node.type === 'FACT';
   });
+  if (candidates.length > HASM_CHAT.SHORTLIST_THRESHOLD) {
+    const recentUserText = history.map(function(turn) { return turn && turn.user ? turn.user : ''; }).join('\n');
+    candidates = shortlistHASMChatCandidates_(candidates, message + '\n' + recentUserText, HASM_CHAT.SHORTLIST_SIZE);
+  }
   const matches = [];
   const schema = {
     type: 'OBJECT',
@@ -69,9 +73,12 @@ function retrieveHASMChatMatches_(corpus, message, history, config, deadline) {
   };
   for (let offset = 0; offset < candidates.length; offset += HASM_CHAT.RETRIEVAL_BATCH_SIZE) {
     checkHASMChatDeadline_(deadline);
+    reportHASMChatProgress_('Comparing structural patterns', Math.floor(offset / HASM_CHAT.RETRIEVAL_BATCH_SIZE),
+      Math.ceil(candidates.length / HASM_CHAT.RETRIEVAL_BATCH_SIZE));
     const batch = candidates.slice(offset, offset + HASM_CHAT.RETRIEVAL_BATCH_SIZE);
     const result = requestHASMChatJSON_(config, buildHASMStructuralPrompt_(), {
-      challenge: message, history: history, nodes: batch.map(hasmChatEvidence_)
+      challenge: message, history: compactHASMChatHistory_(history),
+      nodes: batch.map(function(node) { return hasmChatEvidence_(node, HASM_CHAT.RETRIEVAL_EVIDENCE_CHARS); })
     }, schema, 4096);
     if (!result || !Array.isArray(result.matches) || result.matches.length > HASM_CHAT.MAX_MATCHES) {
       throw new Error('Gemini returned invalid structural matches.');
@@ -91,8 +98,16 @@ function retrieveHASMChatMatches_(corpus, message, history, config, deadline) {
     .slice(0, HASM_CHAT.MAX_MATCHES);
 }
 
-function hasmChatEvidence_(node) {
-  return { uuid: node.uuid, type: node.type, title: node.title, metadata: node.fields, markdown: node.body };
+function hasmChatEvidence_(node, maxChars) {
+  const markdown = maxChars && node.body && node.body.length > maxChars ?
+    node.body.substring(0, maxChars) + '\n[truncated]' : node.body;
+  return { uuid: node.uuid, type: node.type, title: node.title, metadata: node.fields, markdown: markdown };
+}
+
+function compactHASMChatHistory_(history) {
+  return history.map(function(turn) {
+    return { user: turn.user, assistant: String(turn.assistant || '').substring(0, 500) };
+  });
 }
 
 function expandHASMChatContext_(corpus, matches) {
@@ -203,11 +218,12 @@ function generateHASMChatResponse_(mode, message, history, corpus, config) {
   const matches = retrieveHASMChatMatches_(corpus, message, history, config, deadline);
   const context = expandHASMChatContext_(corpus, matches);
   checkHASMChatDeadline_(deadline);
+  reportHASMChatProgress_('Composing guidance from ' + context.nodes.length + ' linked records', 1, 1);
   const result = requestHASMChatJSON_(config, buildHASMChatPrompt_(mode), {
     challenge: message,
     history: history,
     structuralMatches: matches,
-    nodes: context.nodes.map(hasmChatEvidence_),
+    nodes: context.nodes.map(function(node) { return hasmChatEvidence_(node, HASM_CHAT.CONTEXT_EVIDENCE_CHARS); }),
     relations: context.edges
   }, {
     type: 'OBJECT',

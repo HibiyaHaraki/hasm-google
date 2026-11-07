@@ -213,6 +213,7 @@ function createHASMEntity_(root, database, entityType, fields, body, urls, times
   if (sourceKey) {
     database.sync_metadata.source_keys[sourceKey] = uuid;
   }
+  console.log('    created ' + entity.entity_type + ': ' + String(fields.title || '').substring(0, 80));
   return entity;
 }
 
@@ -260,7 +261,10 @@ function driveBatchCreateEntityFiles_(parentFolderId, markdown) {
   if (status < 200 || status >= 300) {
     throw new Error('Drive batch write failed (' + status + '): ' + responseText.substring(0, 1000));
   }
-  const results = parseDriveBatchResponse_(responseText, batchBoundary);
+  const headers = response.getHeaders();
+  const contentType = headers['Content-Type'] || headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary="?([^";]+)"?/i);
+  const results = parseDriveBatchResponse_(responseText, boundaryMatch ? boundaryMatch[1] : batchBoundary);
   if (!results.assets || !results.main) {
     throw new Error('Drive batch write did not return both assets and main.md file IDs.');
   }
@@ -489,7 +493,10 @@ function createHASMEvent_(root, database, records, generated) {
     const origin = entitiesByName[String(link.from || '').trim().toLocaleLowerCase()];
     const target = entitiesByName[String(link.to || '').trim().toLocaleLowerCase()];
     if (!origin || !target || origin.entity_id === target.entity_id) {
-      throw new Error('Generated LINK endpoints must reference two distinct generated HASM entities.');
+      console.warn('Skipping generated link with unresolved or identical endpoints: ' + JSON.stringify({
+        title: link.title, from: link.from, to: link.to
+      }));
+      return;
     }
     const linkType = link.relation || link.title;
     const entity = createHASMEntity_(root, database, 'LINK', {

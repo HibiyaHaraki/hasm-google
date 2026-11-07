@@ -12,7 +12,12 @@ function syncHASM() {
     const database = loadHASMDatabase_(root);
     const collection = collectHASMRecords_(config, deadline);
     const records = collection.records;
-    const groups = groupHASMRecords_(records, config.groupWindowMinutes);
+    const groups = groupHASMRecords_(records, config.groupWindowMinutes, config.maxRecordsPerGroup, HASM.MAX_GROUP_TEXT_CHARS);
+    const todo = groups.filter(function(group) {
+      return !database.sync_metadata.source_keys[hashSourceIds_(group.map(function(record) { return record.id; }).sort())];
+    }).length;
+    console.log('[HASM] Collected ' + records.length + ' records in ' + groups.length + ' groups; ' +
+      todo + ' new groups to process (up to ' + config.maxEventsPerRun + ' this run).');
     let processed = 0;
     let index = 0;
     for (; index < groups.length; index++) {
@@ -24,10 +29,25 @@ function syncHASM() {
       if (database.sync_metadata.source_keys[sourceKey]) {
         continue;
       }
-      const generated = generateHASMEvent_(group, config);
+      console.log('[HASM] Event ' + (processed + 1) + ' (group ' + (index + 1) + '/' + groups.length + ', ' +
+        group.length + ' records, ' + group[0].timestamp + '): asking Gemini...');
+      let generated;
+      try {
+        generated = generateHASMEvent_(group, config);
+      } catch (error) {
+        if (error.hasmTransient) {
+          console.warn('[HASM] Gemini is unavailable; stopping this run and scheduling a retry. ' + error.message);
+          break;
+        }
+        throw error;
+      }
+      console.log('[HASM] Gemini returned ' + generated.facts.length + ' facts, ' + generated.people.length +
+        ' people, ' + generated.links.length + ' links; writing to Drive...');
       createHASMEvent_(root, database, group, generated);
       saveHASMDatabase_(root, database);
       processed++;
+      console.log('[HASM] Saved event ' + processed + ' (' + (todo - processed) + ' groups remaining).');
+      Utilities.sleep(HASM.GEMINI_PACING_MS);
     }
     const pendingGroups = groups.slice(index).some(function(group) {
       const key = hashSourceIds_(group.map(function(record) { return record.id; }).sort());
@@ -57,7 +77,7 @@ function syncHASM() {
   }
 }
 
-function groupHASMRecords_(records, windowMinutes) {
+function groupHASMRecords_(records, windowMinutes, maxRecords, maxChars) {
   const sorted = records.filter(function(record) {
     return record.timestamp && !isNaN(new Date(record.timestamp).getTime());
   }).sort(function(left, right) {
@@ -66,18 +86,24 @@ function groupHASMRecords_(records, windowMinutes) {
   const groups = [];
   let current = [];
   let groupStart = 0;
+  let chars = 0;
   const windowMs = windowMinutes * 60 * 1000;
   sorted.forEach(function(record) {
     const time = new Date(record.timestamp).getTime();
-    if (!current.length || time - groupStart <= windowMs) {
+    const size = String(record.text || '').length;
+    const fits = (!maxRecords || current.length < maxRecords) && (!maxChars || chars + size <= maxChars);
+    if (!current.length || (time - groupStart <= windowMs && fits)) {
       if (!current.length) {
         groupStart = time;
+        chars = 0;
       }
       current.push(record);
+      chars += size;
     } else {
       groups.push(current);
       current = [record];
       groupStart = time;
+      chars = size;
     }
   });
   if (current.length) {

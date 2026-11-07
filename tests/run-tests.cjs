@@ -29,7 +29,7 @@ function makeCache() {
     getAll(keys) { return Object.fromEntries(keys.map(key => [key, this.get(key)])); },
     put(key, value, ttl) {
       assert.ok(Buffer.byteLength(value) < 100 * 1024, 'CacheService value limit');
-      assert.equal(ttl, 600);
+      assert.ok(ttl > 0 && ttl <= 21600);
       entries.set(key, value);
     },
     putAll(values, ttl) { Object.entries(values).forEach(([key, value]) => this.put(key, value, ttl)); }
@@ -250,6 +250,19 @@ assert.throws(() => context.retrieveHASMChatMatches_({ nodes: manyNodes, edges: 
 apiQueue.push({ result: { matches: [match, match] } });
 assert.throws(() => context.retrieveHASMChatMatches_({ nodes: manyNodes, edges: [] },
   'Challenge', [], { apiKey: 'test-key', model: 'test' }), /unsupported structural match/);
+
+const largeCorpus = Array.from({ length: 120 }, (_, i) => context.chatTestNode_(i + 1));
+largeCorpus[100].title = 'Database migration rollback';
+largeCorpus[100].body = 'The 移行計画 for the database migration failed and rollback was planned.';
+let seenNodes = 0;
+apiQueue.push(
+  { check(payload) { seenNodes += JSON.parse(payload.contents[0].parts[0].text).nodes.length; }, result: { matches: [] } },
+  { check(payload) { seenNodes += JSON.parse(payload.contents[0].parts[0].text).nodes.length; }, result: { matches: [] } }
+);
+context.retrieveHASMChatMatches_({ nodes: largeCorpus, edges: [] }, 'database migration rollback', [], { apiKey: 'test-key', model: 'test' });
+assert.equal(seenNodes, 40, 'only the shortlist is sent to Gemini');
+const shortlist = context.shortlistHASMChatCandidates_(largeCorpus, '移行計画 failed', 5);
+assert.equal(shortlist[0].uuid, largeCorpus[100].uuid, 'CJK and Latin terms rank the relevant node first');
 
 const cache = userCache();
 const randomText = crypto.randomBytes(150000).toString('base64');

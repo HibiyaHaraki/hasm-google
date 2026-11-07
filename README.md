@@ -71,7 +71,7 @@ with your script ID, and use `npm run clasp:status`, `push`, `pull`, `open`,
 | Time zone | Asia/Tokyo |
 | Web app access | Only the owner (`MYSELF`), executes as the accessing user |
 | Advanced services | None |
-| OAuth scopes | `gmail.readonly`, `drive`, `script.external_request`, `script.scriptapp` |
+| OAuth scopes | `gmail.readonly`, `calendar.readonly`, `drive`, `script.external_request`, `script.scriptapp` |
 | Pushed files | `*.gs` (including `tests/`), `Chat.html`, `appsscript.json` |
 
 The script ID, linked account and Script Properties (including the Gemini key)
@@ -79,7 +79,11 @@ are intentionally not recorded here; the ID lives only in the ignored `.clasp.js
 
 See [chat architecture and prompt design](doc/chat-architecture.md) and
 [UI specification](doc/ui-design.md) for privacy, quotas, supported frontmatter,
-limits and deployment verification. HTML Service uses asynchronous calls, not
+limits and deployment verification. Chat retrieval first shortlists the 40 most
+lexically relevant EXPERIENCE/FACT nodes locally (BM25 over Latin words and
+CJK bigrams, no Gemini call), then asks Gemini to rerank only that shortlist
+using truncated evidence, and truncates node text and history in the final
+prompt. Small corpora (up to 40 nodes) are reranked in full. HTML Service uses asynchronous calls, not
 token streaming. Chat currently supports curated roots of up to 300 entities;
 oversized data and malformed records fail explicitly.
 

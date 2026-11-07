@@ -20,6 +20,9 @@
     :focus-visible { outline: 3px solid #b26800; outline-offset: 3px; }
     .privacy, .hint { font-size: .88rem; color: #506078; line-height: 1.5; }
     #status { min-height: 24px; margin: 14px 0 0; }
+    #progress-wrap { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+    #progress { flex: 1; height: 14px; accent-color: #174fa3; }
+    #progress-label { font-size: .88rem; color: #506078; min-width: 40%; }
     #error { color: #9c2020; background: #fff0ef; border-radius: 8px; padding: 12px; margin-top: 12px; white-space: pre-wrap; }
     [hidden] { display: none !important; }
     #conversation { display: grid; gap: 16px; margin: 20px 0; }
@@ -66,6 +69,10 @@
         are sent to the configured Gemini API for matching and coaching. No assets or external pages
         are fetched. AI output can be wrong: verify claims and sources before using them.</p>
       <p id="status" role="status" aria-live="polite">Start a conversation to load your records.</p>
+      <div id="progress-wrap" hidden>
+        <progress id="progress" max="100" aria-label="Progress"></progress>
+        <span id="progress-label"></span>
+      </div>
       <div id="error" role="alert" hidden></div>
     </section>
     <section id="conversation" aria-label="Conversation" aria-busy="false"></section>
@@ -89,13 +96,42 @@
       conversation: document.getElementById('conversation'),
       composer: document.getElementById('composer'),
       message: document.getElementById('message'),
-      send: document.getElementById('send')
+      send: document.getElementById('send'),
+      progressWrap: document.getElementById('progress-wrap'),
+      progress: document.getElementById('progress'),
+      progressLabel: document.getElementById('progress-label')
     };
     let sessionId = '';
     let busy = false;
+    let pollTimer = null;
+
+    function renderProgress(info) {
+      if (!info) { return; }
+      if (info.total > 0) {
+        ui.progress.max = info.total;
+        ui.progress.value = info.done;
+        ui.progressLabel.textContent = info.stage + ' (' + info.done + '/' + info.total + ')';
+      } else {
+        ui.progress.removeAttribute('value');
+        ui.progressLabel.textContent = info.stage + '...';
+      }
+    }
+
+    function pollProgress() {
+      google.script.run.withSuccessHandler(function(info) {
+        if (busy) { renderProgress(info); }
+      }).withFailureHandler(function() {}).getHASMChatProgress();
+    }
 
     function setBusy(value, status) {
       busy = value;
+      ui.progressWrap.hidden = !value;
+      clearInterval(pollTimer);
+      if (value) {
+        ui.progress.removeAttribute('value');
+        ui.progressLabel.textContent = 'Starting...';
+        pollTimer = setInterval(pollProgress, 1500);
+      }
       ui.mode.disabled = value;
       ui.start.disabled = value;
       ui.send.disabled = value || !sessionId;
@@ -251,14 +287,14 @@
       google.script.run.withSuccessHandler(function(response) {
         renderResponse(response);
         ui.message.value = '';
-        setBusy(false, 'Response ready. Review the sources before using the advice.');
+        setBusy(false, response.notice || 'Response ready. Review the sources before using the advice.');
         ui.message.focus();
       }).withFailureHandler(function(error) {
         userArticle.remove();
         setBusy(false, 'Request failed. Your draft is preserved; check the error or reload if the session expired.');
         showError(error);
         ui.message.focus();
-      }).sendHASMChatMessage(sessionId, message);
+      }).sendHASMChatMessage(sessionId, message, ui.mode.value);
     });
 
     ui.message.addEventListener('keydown', function(event) {

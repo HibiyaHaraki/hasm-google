@@ -10,11 +10,14 @@ Set these in **Project Settings → Script Properties**:
 | `HASM_END_ISO` | sync only | Exclusive range end, ISO timestamp |
 | `GEMINI_API_KEY` | yes | Gemini API key; never put it in source control |
 | `GEMINI_MODEL` | no | Model name, defaults to `gemini-2.5-flash` |
-| `HASM_GROUP_WINDOW_MINUTES` | no | Group window, defaults to 45 |
+| `HASM_GROUP_WINDOW_MINUTES` | no | Max time span of one EXPERIENCE, measured from its first record; defaults to 1440 (one day) |
+| `HASM_MAX_RECORDS_PER_GROUP` | no | Max records per EXPERIENCE (also capped at 30,000 text characters); defaults to 25 |
 | `HASM_MAX_EVENTS_PER_RUN` | no | New groups processed per invocation, defaults to 30 |
 | `HASM_GMAIL_QUERY` | no | Additional Gmail search terms |
 | `HASM_MAPS_EXPORT_FILE_ID` | no | Drive file ID for a Maps Timeline JSON export |
 | `HASM_MEDIA_FOLDER_ID` | no | Drive folder ID containing image files |
+| `HASM_CALENDAR_IDS` | no | Comma-separated Google Calendar IDs to import (`primary` for your default calendar); off when unset |
+| `HASM_DRIVE_DOCS_FOLDER_ID` | no | Drive folder (searched recursively) whose Docs, Slides and text files modified in the range are imported; off when unset. Never point it at the HASM root |
 | `HASM_CHAT_ROOT_FOLDER_ID` | no | Existing HASM root folder for chat; otherwise require a unique accessible `hasm_root` |
 
 ## Entry points

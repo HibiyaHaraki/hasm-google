@@ -1,5 +1,6 @@
 const HASM_CHAT = Object.freeze({
-  CACHE_SECONDS: 600,
+  CACHE_SECONDS: 21600,
+  PROGRESS_KEY: 'hasm-chat:progress',
   CACHE_CHUNK_SIZE: 80000,
   MAX_CACHE_CHUNKS: 12,
   MAX_ENTITIES: 300,
@@ -7,6 +8,10 @@ const HASM_CHAT = Object.freeze({
   MAX_MESSAGE_CHARS: 4000,
   MAX_HISTORY_TURNS: 3,
   RETRIEVAL_BATCH_SIZE: 20,
+  SHORTLIST_THRESHOLD: 40,
+  SHORTLIST_SIZE: 40,
+  RETRIEVAL_EVIDENCE_CHARS: 1500,
+  CONTEXT_EVIDENCE_CHARS: 6000,
   MAX_MATCHES: 5,
   MAX_CONTEXT_NODES: 15,
   UUID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -126,7 +131,10 @@ function readHASMChatCorpus_(root) {
   const nodes = [];
   const known = Object.create(null);
   const typeFolders = Object.create(null);
-  rows.forEach(function(row) {
+  rows.forEach(function(row, rowIndex) {
+    if (rowIndex % 5 === 0) {
+      reportHASMChatProgress_('Reading HASM records from Drive', rowIndex, rows.length);
+    }
     if (!row || typeof row.uuid !== 'string' || !HASM_CHAT.UUID_PATTERN.test(row.uuid) ||
         ['EXPERIENCE', 'FACT', 'LINK', 'PERSON'].indexOf(row.entity_type) === -1 || known[row.uuid]) {
       throw new Error('Invalid or duplicate HASM entity in hasm.db.');
