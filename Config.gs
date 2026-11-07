@@ -1,7 +1,7 @@
 const HASM = Object.freeze({
   ROOT_FOLDER_NAME: 'hasm_root',
   DATABASE_FILE_NAME: 'hasm.db',
-  DEFAULT_MODEL: 'gemini-2.5-flash',
+  DEFAULT_MODEL: 'gemini-3.5-flash-lite',
   DEFAULT_GROUP_WINDOW_MINUTES: 45,
   MAX_RUNTIME_MS: 240000,
   MAX_EVENTS_PER_RUN: 30,

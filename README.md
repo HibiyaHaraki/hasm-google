@@ -55,6 +55,28 @@ deployment access in the Apps Script editor. `.claspignore` uploads only GAS,
 the chat HTML and the manifest, including GAS tests; it excludes local tooling
 and documentation. Do not commit generated credentials or `.clasp.json`.
 
+Local clasp workflow (requires `npm i -g @google/clasp` and the Apps Script API
+enabled at https://script.google.com/home/usersettings): `npm run clasp:login`,
+then either `npm run clasp:create` or copy `.clasp.json.example` to `.clasp.json`
+with your script ID, and use `npm run clasp:status`, `push`, `pull`, `open`,
+`logs`, and `npm test` for the local test runner.
+
+### Apps Script project
+
+| Item | Value |
+| --- | --- |
+| Title | HASM |
+| Type | Standalone script |
+| Runtime | V8 |
+| Time zone | Asia/Tokyo |
+| Web app access | Only the owner (`MYSELF`), executes as the accessing user |
+| Advanced services | None |
+| OAuth scopes | `gmail.readonly`, `drive`, `script.external_request`, `script.scriptapp` |
+| Pushed files | `*.gs` (including `tests/`), `Chat.html`, `appsscript.json` |
+
+The script ID, linked account and Script Properties (including the Gemini key)
+are intentionally not recorded here; the ID lives only in the ignored `.clasp.json`.
+
 See [chat architecture and prompt design](doc/chat-architecture.md) and
 [UI specification](doc/ui-design.md) for privacy, quotas, supported frontmatter,
 limits and deployment verification. HTML Service uses asynchronous calls, not

@@ -14,3 +14,34 @@ node_modules/
 .DS_Store
 *.log
 coverage/
+
+# Personal data exports and generated HASM output
+*.sqlite
+*.sqlite3
+*.db
+Timeline*.json
+Location History*.json
+Records.json
+semantic-location-history/
+hasm_root/
+exports/
+export/
+local/
+.local/
+
+# Local secrets and properties
+*.pfx
+*.p12
+secrets/
+.secrets*
+script-properties*.json
+properties*.json
+!package.json
+!package-lock.json
+!appsscript.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

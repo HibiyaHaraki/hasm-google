@@ -2,3 +2,4 @@
 !**/*.gs
 !Chat.html
 !appsscript.json
+!**/appsscript.json

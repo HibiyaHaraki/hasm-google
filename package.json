@@ -2,6 +2,13 @@
   "name": "hasm-google",
   "private": true,
   "scripts": {
-    "test": "node tests\\run-tests.cjs"
+    "test": "node tests\\run-tests.cjs",
+    "clasp:login": "clasp login",
+    "clasp:create": "clasp create --type standalone --title HASM --rootDir .",
+    "clasp:status": "clasp status",
+    "push": "clasp push",
+    "pull": "clasp pull",
+    "open": "clasp open-script",
+    "logs": "clasp logs"
   }
 }
